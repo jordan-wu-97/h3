@@ -1,4 +1,4 @@
-use std::task::Poll;
+use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
 use h3::{
@@ -39,6 +39,10 @@ where
 
     fn stop_sending(&mut self, error_code: u64) {
         self.stream.stop_sending(error_code)
+    }
+
+    fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.stream.poll_reset(cx)
     }
 
     fn recv_id(&self) -> quic::StreamId {
@@ -143,6 +147,10 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), StreamErrorIncoming>> {
         self.stream.poll_ready(cx)
+    }
+
+    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.stream.poll_stopped(cx)
     }
 }
 
@@ -256,6 +264,10 @@ where
     ) -> Result<(), StreamErrorIncoming> {
         self.stream.send_data(data)
     }
+
+    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.stream.poll_stopped(cx)
+    }
 }
 
 impl<S, B> quic::SendStreamUnframed<B> for BidiStream<S, B>
@@ -284,6 +296,10 @@ impl<S: quic::RecvStream, B> quic::RecvStream for BidiStream<S, B> {
 
     fn stop_sending(&mut self, error_code: u64) {
         self.stream.stop_sending(error_code)
+    }
+
+    fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.stream.poll_reset(cx)
     }
 
     fn recv_id(&self) -> quic::StreamId {

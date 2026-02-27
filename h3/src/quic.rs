@@ -181,6 +181,25 @@ pub trait SendStream<B: Buf> {
     /// Send a QUIC reset code.
     fn reset(&mut self, reset_code: u64);
 
+    /// Poll for the peer's STOP_SENDING signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer sends a STOP_SENDING frame,
+    /// allowing proactive detection of request cancellation without needing a
+    /// write attempt. Per RFC 9114 Section 4.1.1, clients use
+    /// `H3_REQUEST_CANCELLED` (0x10c) when cancelling requests.
+    ///
+    /// This is useful for server-side cancellation detection: a server can race
+    /// this against response generation (e.g., via `tokio::select!`) to stop
+    /// work early when the client navigates away.
+    ///
+    /// Note: if a write operation (`poll_ready`) is in progress, the STOP_SENDING
+    /// signal may instead be delivered as an error from that write. Implementations
+    /// may return `Poll::Pending` while a write is in flight.
+    fn poll_stopped(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<u64, StreamErrorIncoming>>;
+
     /// Get QUIC send stream id
     fn send_id(&self) -> StreamId;
 }
@@ -215,6 +234,18 @@ pub trait RecvStream {
 
     /// Send a `STOP_SENDING` QUIC code.
     fn stop_sending(&mut self, error_code: u64);
+
+    /// Poll for the peer's RESET_STREAM signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer sends a RESET_STREAM frame,
+    /// allowing proactive detection of the peer aborting their send side without
+    /// needing a read attempt. Per RFC 9114 Section 4.1.1, clients use
+    /// `H3_REQUEST_CANCELLED` (0x10c) when cancelling requests.
+    ///
+    /// Note: if a read operation (`poll_data`) is in progress, the RESET_STREAM
+    /// signal may instead be delivered as an error from that read. Implementations
+    /// may return `Poll::Pending` while a read is in flight.
+    fn poll_reset(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>>;
 
     /// Get QUIC send stream id
     fn recv_id(&self) -> StreamId;

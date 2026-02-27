@@ -296,6 +296,10 @@ impl<B: Buf> quic::RecvStream for BidiStream<B> {
         self.recv.stop_sending(error_code)
     }
 
+    fn poll_reset(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.recv.poll_reset(cx)
+    }
+
     fn recv_id(&self) -> StreamId {
         self.recv.recv_id()
     }
@@ -315,6 +319,13 @@ where
 
     fn reset(&mut self, reset_code: u64) {
         self.send.reset(reset_code)
+    }
+
+    fn poll_stopped(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.send.poll_stopped(cx)
     }
 
     fn send_data<D: Into<WriteBuf<B>>>(&mut self, data: D) -> Result<(), StreamErrorIncoming> {
@@ -353,6 +364,7 @@ where
 pub struct RecvStream {
     stream: Option<quinn::RecvStream>,
     read_chunk_fut: ReadChunkFuture,
+    reset_fut: ResetFuture,
     is_0rtt: bool,
     pending_stop: Option<VarInt>,
 }
@@ -365,6 +377,10 @@ type ReadChunkFuture = ReusableBoxFuture<
     ),
 >;
 
+/// Future type for polling `quinn::RecvStream::received_reset()`
+type ResetFuture =
+    ReusableBoxFuture<'static, (quinn::RecvStream, Result<Option<VarInt>, quinn::ResetError>)>;
+
 impl RecvStream {
     fn new(stream: quinn::RecvStream) -> Self {
         let is_0rtt = stream.is_0rtt();
@@ -372,6 +388,7 @@ impl RecvStream {
             stream: Some(stream),
             // Should only allocate once the first time it's used
             read_chunk_fut: ReusableBoxFuture::new(async { unreachable!() }),
+            reset_fut: ReusableBoxFuture::new(async { unreachable!() }),
             is_0rtt,
             pending_stop: None,
         }
@@ -410,6 +427,40 @@ impl quic::RecvStream for RecvStream {
             let _ = stream.stop(error_code);
         } else {
             self.pending_stop = Some(error_code);
+        }
+    }
+
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    fn poll_reset(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        // If the stream is currently taken by read_chunk_fut, we can't also poll for reset.
+        // The reset will be delivered through the read error in that case.
+        if let Some(mut stream) = self.stream.take() {
+            self.reset_fut.set(async move {
+                let result = stream.received_reset().await;
+                (stream, result)
+            });
+        } else {
+            // Stream is borrowed by read_chunk_fut; reset will surface through poll_data
+            return Poll::Pending;
+        }
+
+        let (stream, result) = ready!(self.reset_fut.poll(cx));
+        self.stream = Some(stream);
+
+        match result {
+            Ok(Some(error_code)) => Poll::Ready(Ok(error_code.into_inner())),
+            Ok(None) => {
+                // Stream finished cleanly, no reset received.
+                Poll::Pending
+            }
+            Err(quinn::ResetError::ConnectionLost(conn_err)) => {
+                Poll::Ready(Err(StreamErrorIncoming::ConnectionErrorIncoming {
+                    connection_error: convert_connection_error(conn_err),
+                }))
+            }
+            Err(quinn::ResetError::ZeroRttRejected) => Poll::Ready(Err(
+                StreamErrorIncoming::Unknown(Box::new(quinn::ResetError::ZeroRttRejected)),
+            )),
         }
     }
 
@@ -463,12 +514,22 @@ fn convert_write_error_to_stream_error(error: quinn::WriteError) -> StreamErrorI
     }
 }
 
+/// Future type for polling `quinn::SendStream::stopped()`
+type StoppedFuture = ReusableBoxFuture<
+    'static,
+    (
+        quinn::SendStream,
+        Result<Option<VarInt>, quinn::StoppedError>,
+    ),
+>;
+
 /// Quinn-backed send stream
 ///
 /// Implements a [`quic::SendStream`] backed by a [`quinn::SendStream`].
 pub struct SendStream<B: Buf> {
-    stream: quinn::SendStream,
+    stream: Option<quinn::SendStream>,
     writing: Option<WriteBuf<B>>,
+    stopped_fut: StoppedFuture,
 }
 
 impl<B> SendStream<B>
@@ -477,8 +538,9 @@ where
 {
     fn new(stream: quinn::SendStream) -> SendStream<B> {
         Self {
-            stream,
+            stream: Some(stream),
             writing: None,
+            stopped_fut: ReusableBoxFuture::new(async { unreachable!() }),
         }
     }
 }
@@ -491,7 +553,7 @@ where
     fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), StreamErrorIncoming>> {
         if let Some(ref mut data) = self.writing {
             while data.has_remaining() {
-                let stream = Pin::new(&mut self.stream);
+                let stream = Pin::new(self.stream.as_mut().expect("stream not available"));
                 let written = ready!(stream.poll_write(cx, data.chunk()))
                     .map_err(convert_write_error_to_stream_error)?;
                 data.advance(written);
@@ -509,6 +571,8 @@ where
     ) -> Poll<Result<(), StreamErrorIncoming>> {
         Poll::Ready(
             self.stream
+                .as_mut()
+                .expect("stream not available")
                 .finish()
                 .map_err(|e| StreamErrorIncoming::Unknown(Box::new(e))),
         )
@@ -518,7 +582,43 @@ where
     fn reset(&mut self, reset_code: u64) {
         let _ = self
             .stream
+            .as_mut()
+            .expect("stream not available")
             .reset(VarInt::from_u64(reset_code).unwrap_or(VarInt::MAX));
+    }
+
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    fn poll_stopped(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<u64, StreamErrorIncoming>> {
+        if let Some(stream) = self.stream.take() {
+            self.stopped_fut.set(async move {
+                let result = stream.stopped().await;
+                (stream, result)
+            });
+        }
+
+        let (stream, result) = ready!(self.stopped_fut.poll(cx));
+        self.stream = Some(stream);
+
+        match result {
+            Ok(Some(error_code)) => Poll::Ready(Ok(error_code.into_inner())),
+            Ok(None) => {
+                // Stream finished cleanly (all data acknowledged), no STOP_SENDING received.
+                // This shouldn't normally happen as a "stopped" result for cancellation detection.
+                // Re-register for the next poll by returning Pending.
+                Poll::Pending
+            }
+            Err(quinn::StoppedError::ConnectionLost(conn_err)) => {
+                Poll::Ready(Err(StreamErrorIncoming::ConnectionErrorIncoming {
+                    connection_error: convert_connection_error(conn_err),
+                }))
+            }
+            Err(quinn::StoppedError::ZeroRttRejected) => Poll::Ready(Err(
+                StreamErrorIncoming::Unknown(Box::new(quinn::StoppedError::ZeroRttRejected)),
+            )),
+        }
     }
 
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
@@ -541,7 +641,12 @@ where
 
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
     fn send_id(&self) -> StreamId {
-        let num: u64 = self.stream.id().into();
+        let num: u64 = self
+            .stream
+            .as_ref()
+            .expect("stream not available")
+            .id()
+            .into();
         num.try_into().expect("invalid stream id")
     }
 }
@@ -561,7 +666,7 @@ where
             panic!("poll_send called while send stream is not ready")
         }
 
-        let s = Pin::new(&mut self.stream);
+        let s = Pin::new(self.stream.as_mut().expect("stream not available"));
 
         let res = ready!(s.poll_write(cx, buf.chunk()));
         match res {

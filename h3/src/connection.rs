@@ -1026,6 +1026,18 @@ where
     pub fn stop_sending(&mut self, err_code: Code) {
         self.stream.stop_sending(err_code);
     }
+
+    /// Poll for the peer's RESET_STREAM signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer resets the stream, allowing
+    /// proactive detection without needing a read attempt.
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    pub fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamError>> {
+        self.stream
+            .stream
+            .poll_reset(cx)
+            .map_err(|e| self.handle_quic_stream_error(e))
+    }
 }
 
 impl<S, B> RequestStream<S, B>
@@ -1090,6 +1102,17 @@ where
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
     pub fn stop_stream(&mut self, code: Code) {
         self.stream.reset(code.into());
+    }
+
+    /// Poll for the peer's STOP_SENDING signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer sends STOP_SENDING, allowing
+    /// proactive detection of request cancellation without needing a write attempt.
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    pub fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamError>> {
+        self.stream
+            .poll_stopped(cx)
+            .map_err(|e| self.handle_quic_stream_error(e))
     }
 
     #[allow(missing_docs)]

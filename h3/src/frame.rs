@@ -185,6 +185,10 @@ where
         self.stream.reset(reset_code)
     }
 
+    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+        self.stream.poll_stopped(cx)
+    }
+
     fn send_id(&self) -> StreamId {
         self.stream.send_id()
     }
@@ -616,6 +620,10 @@ mod tests {
 
         fn stop_sending(&mut self, _: u64) {
             unimplemented!()
+        }
+
+        fn poll_reset(&mut self, _: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
+            Poll::Pending
         }
 
         fn recv_id(&self) -> StreamId {
