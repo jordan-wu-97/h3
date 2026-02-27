@@ -4,6 +4,7 @@
 //! QUIC implementation.
 
 use std::fmt::{Debug, Display};
+use std::future::Future;
 use std::sync::Arc;
 use std::task::{self, Poll};
 
@@ -183,6 +184,22 @@ pub trait SendStream<B: Buf> {
 
     /// Get QUIC send stream id
     fn send_id(&self) -> StreamId;
+
+    /// Listen for a STOP_SENDING signal from the peer.
+    ///
+    /// Returns a future that resolves to `Some(StreamTerminated { error_code })`
+    /// when the peer sends a STOP_SENDING frame, allowing proactive detection of
+    /// request cancellation without needing a write attempt. Per RFC 9114
+    /// Section 4.1.1, clients use `H3_REQUEST_CANCELLED` (0x10c) when cancelling
+    /// requests.
+    ///
+    /// Resolves to `Some(other_error)` on connection-level errors, or `None` if
+    /// the send stream finished cleanly without receiving STOP_SENDING.
+    ///
+    /// This is useful for server-side cancellation detection: a server can race
+    /// this against response generation (e.g., via `tokio::select!`) to stop
+    /// work early when the client navigates away.
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>>;
 }
 
 /// Allows sending unframed pure bytes to a stream. Similar to [`AsyncWrite`](https://docs.rs/tokio/latest/tokio/io/trait.AsyncWrite.html)
@@ -216,8 +233,24 @@ pub trait RecvStream {
     /// Send a `STOP_SENDING` QUIC code.
     fn stop_sending(&mut self, error_code: u64);
 
-    /// Get QUIC send stream id
+    /// Get QUIC recv stream id
     fn recv_id(&self) -> StreamId;
+
+    /// Listen for the peer's RESET_STREAM signal.
+    ///
+    /// Returns a future that resolves to `Some(StreamTerminated { error_code })`
+    /// when the peer sends a RESET_STREAM frame, allowing proactive detection of
+    /// the peer aborting their send side without needing a read attempt. Per RFC
+    /// 9114 Section 4.1.1, clients use `H3_REQUEST_CANCELLED` (0x10c) when
+    /// cancelling requests.
+    ///
+    /// Resolves to `Some(other_error)` on connection-level errors, or `None` if
+    /// the recv stream finished cleanly without receiving RESET_STREAM.
+    ///
+    /// Note: if a read operation (`poll_data`) is in progress, the RESET_STREAM
+    /// signal may instead be delivered as an error from that read. Implementations
+    /// may return a pending future while a read is in flight.
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>>;
 }
 
 /// Optional trait to allow "splitting" a bidirectional stream into two sides.

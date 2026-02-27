@@ -14,8 +14,9 @@ use std::{
 use bytes::{Buf, Bytes};
 
 use futures_util::{
+    future::Either,
     stream::{self},
-    Stream, StreamExt,
+    FutureExt, Stream, StreamExt,
 };
 
 use quinn::ReadError;
@@ -299,6 +300,10 @@ impl<B: Buf> quic::RecvStream for BidiStream<B> {
     fn recv_id(&self) -> StreamId {
         self.recv.recv_id()
     }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.recv.recv_reset()
+    }
 }
 
 impl<B> quic::SendStream<B> for BidiStream<B>
@@ -323,6 +328,10 @@ where
 
     fn send_id(&self) -> StreamId {
         self.send.send_id()
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.send.recv_stopped()
     }
 }
 impl<B> quic::SendStreamUnframed<B> for BidiStream<B>
@@ -418,6 +427,30 @@ impl quic::RecvStream for RecvStream {
         let num: u64 = self.stream.as_ref().unwrap().id().into();
 
         num.try_into().expect("invalid stream id")
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        // If the stream is currently taken by read_chunk_fut, we can't poll for reset.
+        // The reset will be delivered through the read error in that case.
+        if let Some(stream) = self.stream.as_mut() {
+            Either::Left(stream.received_reset().map(|res| match res {
+                Ok(Some(error_code)) => Some(StreamErrorIncoming::StreamTerminated {
+                    error_code: error_code.into_inner(),
+                }),
+                Ok(None) => None,
+                Err(quinn::ResetError::ConnectionLost(conn_err)) => {
+                    Some(StreamErrorIncoming::ConnectionErrorIncoming {
+                        connection_error: convert_connection_error(conn_err),
+                    })
+                }
+                Err(quinn::ResetError::ZeroRttRejected) => Some(StreamErrorIncoming::Unknown(
+                    Box::new(quinn::ResetError::ZeroRttRejected),
+                )),
+            }))
+        } else {
+            // Stream is borrowed by read_chunk_fut; reset will surface through poll_data
+            Either::Right(std::future::pending())
+        }
     }
 }
 
@@ -543,6 +576,23 @@ where
     fn send_id(&self) -> StreamId {
         let num: u64 = self.stream.id().into();
         num.try_into().expect("invalid stream id")
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.stopped().map(|res| match res {
+            Ok(Some(error_code)) => Some(StreamErrorIncoming::StreamTerminated {
+                error_code: error_code.into_inner(),
+            }),
+            Ok(None) => None,
+            Err(quinn::StoppedError::ConnectionLost(conn_err)) => {
+                Some(StreamErrorIncoming::ConnectionErrorIncoming {
+                    connection_error: convert_connection_error(conn_err),
+                })
+            }
+            Err(quinn::StoppedError::ZeroRttRejected) => Some(StreamErrorIncoming::Unknown(
+                Box::new(quinn::StoppedError::ZeroRttRejected),
+            )),
+        })
     }
 }
 

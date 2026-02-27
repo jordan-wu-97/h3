@@ -101,6 +101,16 @@ where
         self.inner.stream.stop_sending(error_code)
     }
 
+    /// Await the peer's RESET_STREAM signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer resets the stream, allowing
+    /// proactive detection without needing a read attempt. Pends forever if the
+    /// stream finished cleanly without a reset.
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    pub async fn recv_reset(&mut self) -> Result<u64, StreamError> {
+        self.inner.recv_reset().await
+    }
+
     /// Returns the underlying stream id
     pub fn id(&self) -> StreamId {
         self.inner.stream.id()
@@ -188,6 +198,16 @@ where
     /// The code can be [`Code::H3_NO_ERROR`].
     pub fn stop_stream(&mut self, error_code: Code) {
         self.inner.stop_stream(error_code);
+    }
+
+    /// Await the peer's STOP_SENDING signal.
+    ///
+    /// Resolves to `Ok(error_code)` when the peer sends STOP_SENDING, allowing
+    /// proactive detection of request cancellation without needing a write attempt.
+    /// Pends forever if the stream finished cleanly without receiving STOP_SENDING.
+    #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
+    pub async fn recv_stopped(&mut self) -> Result<u64, StreamError> {
+        self.inner.recv_stopped().await
     }
 
     /// Send a set of trailers to end the response.

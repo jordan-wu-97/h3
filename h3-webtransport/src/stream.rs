@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::task::Poll;
 
 use bytes::{Buf, Bytes};
@@ -43,6 +44,10 @@ where
 
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
     }
 }
 
@@ -143,6 +148,10 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), StreamErrorIncoming>> {
         self.stream.poll_ready(cx)
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 
@@ -256,6 +265,10 @@ where
     ) -> Result<(), StreamErrorIncoming> {
         self.stream.send_data(data)
     }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
+    }
 }
 
 impl<S, B> quic::SendStreamUnframed<B> for BidiStream<S, B>
@@ -288,6 +301,10 @@ impl<S: quic::RecvStream, B> quic::RecvStream for BidiStream<S, B> {
 
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
     }
 }
 
