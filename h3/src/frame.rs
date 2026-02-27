@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::task::{Context, Poll};
 
 use bytes::Buf;
@@ -185,12 +186,12 @@ where
         self.stream.reset(reset_code)
     }
 
-    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_stopped(cx)
-    }
-
     fn send_id(&self) -> StreamId {
         self.stream.send_id()
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 
@@ -622,12 +623,12 @@ mod tests {
             unimplemented!()
         }
 
-        fn poll_reset(&mut self, _: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-            Poll::Pending
-        }
-
         fn recv_id(&self) -> StreamId {
             unimplemented!()
+        }
+
+        fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+            std::future::pending()
         }
     }
 

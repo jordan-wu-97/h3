@@ -1,12 +1,12 @@
+use bytes::{Buf, BufMut, Bytes};
+use futures_util::{future, ready};
+use pin_project_lite::pin_project;
+use std::future::Future;
 use std::{
     marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
-
-use bytes::{Buf, BufMut, Bytes};
-use futures_util::{future, ready};
-use pin_project_lite::pin_project;
 use tokio::io::ReadBuf;
 
 use crate::{
@@ -517,15 +517,12 @@ impl<S: RecvStream, B> RecvStream for BufRecvStream<S, B> {
         self.stream.stop_sending(error_code)
     }
 
-    fn poll_reset(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_reset(cx)
-    }
-
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
     }
 }
 
@@ -545,13 +542,6 @@ where
         self.stream.reset(reset_code)
     }
 
-    fn poll_stopped(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_stopped(cx)
-    }
-
     fn send_id(&self) -> quic::StreamId {
         self.stream.send_id()
     }
@@ -565,6 +555,10 @@ where
 
     fn send_data<T: Into<WriteBuf<B>>>(&mut self, data: T) -> Result<(), StreamErrorIncoming> {
         self.stream.send_data(data)
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 

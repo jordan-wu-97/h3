@@ -1,4 +1,5 @@
-use std::task::{Context, Poll};
+use std::future::Future;
+use std::task::Poll;
 
 use bytes::{Buf, Bytes};
 use h3::{
@@ -41,12 +42,12 @@ where
         self.stream.stop_sending(error_code)
     }
 
-    fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_reset(cx)
-    }
-
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
     }
 }
 
@@ -149,8 +150,8 @@ where
         self.stream.poll_ready(cx)
     }
 
-    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_stopped(cx)
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 
@@ -265,8 +266,8 @@ where
         self.stream.send_data(data)
     }
 
-    fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_stopped(cx)
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 
@@ -298,12 +299,12 @@ impl<S: quic::RecvStream, B> quic::RecvStream for BidiStream<S, B> {
         self.stream.stop_sending(error_code)
     }
 
-    fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamErrorIncoming>> {
-        self.stream.poll_reset(cx)
-    }
-
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
+    }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
     }
 }
 

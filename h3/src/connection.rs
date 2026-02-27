@@ -1027,16 +1027,19 @@ where
         self.stream.stop_sending(err_code);
     }
 
-    /// Poll for the peer's RESET_STREAM signal.
+    /// Await the peer's RESET_STREAM signal.
     ///
     /// Resolves to `Ok(error_code)` when the peer resets the stream, allowing
-    /// proactive detection without needing a read attempt.
+    /// proactive detection without needing a read attempt. Resolves to
+    /// `Err` on connection-level errors. Pends forever if the stream
+    /// finished cleanly without a reset.
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
-    pub fn poll_reset(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamError>> {
-        self.stream
-            .stream
-            .poll_reset(cx)
-            .map_err(|e| self.handle_quic_stream_error(e))
+    pub async fn recv_reset(&mut self) -> Result<u64, StreamError> {
+        match self.stream.stream.recv_reset().await {
+            Some(StreamErrorIncoming::StreamTerminated { error_code }) => Ok(error_code),
+            Some(err) => Err(self.handle_quic_stream_error(err)),
+            None => std::future::pending().await,
+        }
     }
 }
 
@@ -1104,15 +1107,19 @@ where
         self.stream.reset(code.into());
     }
 
-    /// Poll for the peer's STOP_SENDING signal.
+    /// Await the peer's STOP_SENDING signal.
     ///
     /// Resolves to `Ok(error_code)` when the peer sends STOP_SENDING, allowing
     /// proactive detection of request cancellation without needing a write attempt.
+    /// Resolves to `Err` on connection-level errors. Pends forever if the stream
+    /// finished cleanly without receiving STOP_SENDING.
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
-    pub fn poll_stopped(&mut self, cx: &mut Context<'_>) -> Poll<Result<u64, StreamError>> {
-        self.stream
-            .poll_stopped(cx)
-            .map_err(|e| self.handle_quic_stream_error(e))
+    pub async fn recv_stopped(&mut self) -> Result<u64, StreamError> {
+        match self.stream.recv_stopped().await {
+            Some(StreamErrorIncoming::StreamTerminated { error_code }) => Ok(error_code),
+            Some(err) => Err(self.handle_quic_stream_error(err)),
+            None => std::future::pending().await,
+        }
     }
 
     #[allow(missing_docs)]
