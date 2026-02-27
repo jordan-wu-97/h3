@@ -1,12 +1,12 @@
+use bytes::{Buf, BufMut, Bytes};
+use futures_util::{future, ready};
+use pin_project_lite::pin_project;
+use std::future::Future;
 use std::{
     marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
-
-use bytes::{Buf, BufMut, Bytes};
-use futures_util::{future, ready};
-use pin_project_lite::pin_project;
 use tokio::io::ReadBuf;
 
 use crate::{
@@ -520,6 +520,10 @@ impl<S: RecvStream, B> RecvStream for BufRecvStream<S, B> {
     fn recv_id(&self) -> quic::StreamId {
         self.stream.recv_id()
     }
+
+    fn recv_reset(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_reset()
+    }
 }
 
 impl<S, B> SendStream<B> for BufRecvStream<S, B>
@@ -551,6 +555,10 @@ where
 
     fn send_data<T: Into<WriteBuf<B>>>(&mut self, data: T) -> Result<(), StreamErrorIncoming> {
         self.stream.send_data(data)
+    }
+
+    fn recv_stopped(&mut self) -> impl Future<Output = Option<StreamErrorIncoming>> {
+        self.stream.recv_stopped()
     }
 }
 
