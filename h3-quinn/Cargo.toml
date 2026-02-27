@@ -23,6 +23,19 @@ futures-util = { version = "0.3.28", default-features = false }
 h3-datagram = {version = "0.0.2", path = "../h3-datagram", optional = true }
 tracing = { version = "0.1.40", optional = true }
 
+[dev-dependencies]
+h3 = { path = "../h3" }
+bytes = "1"
+quinn = { version = "0.11.7", default-features = false, features = [
+    "runtime-tokio",
+    "rustls",
+    "ring",
+] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+futures-util = { version = "0.3.28" }
+
 [features]
 tracing = ["dep:tracing"]
 datagram = ["dep:h3-datagram"]
